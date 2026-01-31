@@ -182,7 +182,7 @@ def prepare_features(df):
     
     # 4. 合并 X
     # 注意：我们这里不把 judge_score 放入 X 来预测 fan_vote
-    # 因为我们假设 Fan Vote 是由“人”决定的，而不是由“评委分”决定的
+    # 因为我们假设 Fan Vote 是由"人"决定的，而不是由"评委分"决定的
     # 但我们可以加入 'judge_score_std' 作为协变量，因为粉丝容易跟风
     X_final = np.hstack([np.ones((len(df), 1)), X_cat, X_num, df[['judge_score_std']].values])
     
@@ -297,24 +297,33 @@ def simulate_elimination(df, X_all, samples_rank, samples_pct, mask_rank):
     # 3. 赛季内归一化 (Softmax)
     # 因为每周必定淘汰一人(或多人)，我们最好在每周内部比较概率
     df['final_elim_prob'] = 0.0
+    df['est_eliminate'] = 0  # 初始化预测淘汰列
     
     for s in df['season'].unique():
         for w in df[df['season']==s]['week'].unique():
             idx = (df['season']==s) & (df['week']==w)
             if idx.sum() == 0: continue
             
-            probs = df.loc[idx, 'eliminate_prob'].values
-            # Softmax 归一化，让这周总得有人淘汰
-            # 为了拉大差距，可以加个 Temperature
-            probs_exp = np.exp(probs * 2) 
-            probs_norm = probs_exp / np.sum(probs_exp)
+            # 检查本周是否有实际淘汰
+            actual_elim_count = df.loc[idx, 'actual_eliminate'].sum()
             
-            df.loc[idx, 'final_elim_prob'] = probs_norm
-            
-            # 标记预测结果 (概率最大的那个人)
-            best_guess_idx = df[idx]['final_elim_prob'].idxmax()
-            df.loc[idx, 'est_eliminate'] = 0
-            df.loc[best_guess_idx, 'est_eliminate'] = 1
+            if actual_elim_count > 0:
+                # 本周有淘汰，我们预测谁被淘汰
+                probs = df.loc[idx, 'eliminate_prob'].values
+                # Softmax 归一化，让这周总得有人淘汰
+                # 为了拉大差距，可以加个 Temperature
+                probs_exp = np.exp(probs * 2) 
+                probs_norm = probs_exp / np.sum(probs_exp)
+                
+                df.loc[idx, 'final_elim_prob'] = probs_norm
+                
+                # 标记预测结果 (概率最大的那个人)
+                best_guess_idx = df[idx]['final_elim_prob'].idxmax()
+                df.loc[best_guess_idx, 'est_eliminate'] = 1
+            else:
+                # 本周没有淘汰（比如决赛周），所有人预测为晋级
+                df.loc[idx, 'est_eliminate'] = 0
+                df.loc[idx, 'final_elim_prob'] = df.loc[idx, 'eliminate_prob'].values
             
     return df
 
@@ -330,37 +339,202 @@ def check_performance(df):
         auc = roc_auc_score(valid_df['actual_eliminate'], valid_df['final_elim_prob'])
     except:
         auc = 0.5
-        
+    
     print(f"\n📊 模型性能评估:")
     print(f"  - 准确率 (Accuracy): {acc:.2%} (基准线: ~12%)") 
     print(f"  - AUC Score: {auc:.4f}")
     
-    # 绘图
-    plt.figure(figsize=(14, 6))
+    # ===================== 计算每周准确率 =====================
+    weekly_accuracies = []
+    
+    for s in df['season'].unique():
+        season_df = df[df['season'] == s]
+        weeks = sorted(season_df['week'].unique())
+        
+        for w in weeks:
+            week_df = season_df[season_df['week'] == w]
+            
+            # 检查是否有实际的淘汰数据
+            if week_df['actual_eliminate'].isin([0, 1]).any():
+                # 计算本周准确率
+                week_acc = accuracy_score(week_df['actual_eliminate'], week_df['est_eliminate'])
+                
+                # 统计信息
+                week_samples = len(week_df)
+                week_actual_elim = week_df['actual_eliminate'].sum()
+                week_pred_elim = week_df['est_eliminate'].sum()
+                
+                weekly_accuracies.append({
+                    'season': s,
+                    'week': w,
+                    'accuracy': week_acc,
+                    'samples': week_samples,
+                    'actual_eliminations': int(week_actual_elim),
+                    'predicted_eliminations': int(week_pred_elim),
+                    'correct_predictions': int((week_df['actual_eliminate'] == week_df['est_eliminate']).sum()),
+                    'incorrect_predictions': int((week_df['actual_eliminate'] != week_df['est_eliminate']).sum())
+                })
+    
+    weekly_acc_df = pd.DataFrame(weekly_accuracies)
+    
+    # 打印每周准确率
+    if not weekly_acc_df.empty:
+        print("\n📈 每周预测准确率:")
+        print("-" * 80)
+        
+        # 按赛季分组显示
+        for season in sorted(weekly_acc_df['season'].unique()):
+            season_weeks = weekly_acc_df[weekly_acc_df['season'] == season].sort_values('week')
+            print(f"\n赛季 {season}:")
+            print(f"{'周次':<6} {'准确率':<10} {'样本数':<8} {'实际淘汰':<10} {'预测淘汰':<10} {'正确预测':<10} {'错误预测':<10}")
+            print("-" * 80)
+            
+            season_accuracy_sum = 0
+            week_count = 0
+            
+            for _, row in season_weeks.iterrows():
+                print(f"{row['week']:<6} {row['accuracy']:<10.2%} {row['samples']:<8} {row['actual_eliminations']:<10} "
+                      f"{row['predicted_eliminations']:<10} {row['correct_predictions']:<10} {row['incorrect_predictions']:<10}")
+                
+                season_accuracy_sum += row['accuracy']
+                week_count += 1
+            
+            if week_count > 0:
+                season_avg = season_accuracy_sum / week_count
+                print(f"赛季 {season} 平均准确率: {season_avg:.2%}")
+        
+        # 计算总体平均每周准确率
+        avg_weekly_acc = weekly_acc_df['accuracy'].mean()
+        print(f"\n📊 平均每周准确率: {avg_weekly_acc:.2%}")
+        
+        # 按周次统计平均准确率
+        print("\n📊 按周次统计的平均准确率:")
+        week_avg_stats = weekly_acc_df.groupby('week')['accuracy'].agg(['mean', 'std', 'count']).reset_index()
+        for _, row in week_avg_stats.iterrows():
+            print(f"第 {int(row['week']):2d} 周: {row['mean']:.2%} (±{row['std']:.3f}, 样本数: {int(row['count'])})")
+    
+    # ===================== 绘图部分 =====================
+    plt.figure(figsize=(20, 12))
     
     # 子图1: 概率分布
-    plt.subplot(1, 2, 1)
+    plt.subplot(2, 3, 1)
     sns.histplot(df[df['actual_eliminate']==1]['final_elim_prob'], color='red', label='实际被淘汰者', kde=True, bins=20)
     sns.histplot(df[df['actual_eliminate']==0]['final_elim_prob'], color='green', label='实际晋级者', kde=True, bins=20, alpha=0.3)
     plt.title("预测淘汰概率分布 (红绿分离度越高越好)")
     plt.legend()
     
-    # 子图2: 混淆矩阵概念图 (按赛季看准确率)
-    plt.subplot(1, 2, 2)
+    # 子图2: 各赛季预测准确率
+    plt.subplot(2, 3, 2)
     season_acc = df.groupby('season').apply(lambda x: accuracy_score(x['actual_eliminate'], x['est_eliminate'])).reset_index()
     season_acc.columns = ['season', 'acc']
     sns.barplot(x='season', y='acc', data=season_acc, palette='viridis')
-    plt.axhline(y=acc, color='r', linestyle='--', label='平均准确率')
+    plt.axhline(y=acc, color='r', linestyle='--', label='总体平均准确率')
     plt.title("各赛季预测准确率")
     plt.xticks(rotation=90, fontsize=8)
+    plt.legend()
+    
+    # 子图3: 每周准确率热力图
+    plt.subplot(2, 3, 3)
+    if not weekly_acc_df.empty:
+        # 创建热力图数据
+        heatmap_data = weekly_acc_df.pivot(index='season', columns='week', values='accuracy')
+        
+        # 绘制热力图
+        sns.heatmap(heatmap_data, annot=True, fmt='.2f', cmap='YlOrRd', 
+                   cbar_kws={'label': '准确率'}, vmin=0, vmax=1)
+        plt.title("每周预测准确率热力图")
+        plt.xlabel("周次")
+        plt.ylabel("赛季")
+    else:
+        plt.text(0.5, 0.5, "无每周准确率数据", ha='center', va='center')
+        plt.title("每周预测准确率热力图")
+    
+    # 子图4: 每周平均准确率趋势
+    plt.subplot(2, 3, 4)
+    if not weekly_acc_df.empty:
+        week_avg_acc = weekly_acc_df.groupby('week')['accuracy'].agg(['mean', 'std']).reset_index()
+        plt.errorbar(week_avg_acc['week'], week_avg_acc['mean'], 
+                    yerr=week_avg_acc['std'], fmt='bo-', linewidth=2, 
+                    markersize=8, capsize=5, capthick=2)
+        plt.fill_between(week_avg_acc['week'], 
+                        week_avg_acc['mean'] - week_avg_acc['std'],
+                        week_avg_acc['mean'] + week_avg_acc['std'],
+                        alpha=0.2)
+        plt.axhline(y=avg_weekly_acc, color='r', linestyle='--', label=f'平均: {avg_weekly_acc:.2%}')
+        plt.xlabel("周次")
+        plt.ylabel("平均准确率")
+        plt.title("每周平均准确率趋势（带误差条）")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+    
+    # 子图5: 样本数量分布
+    plt.subplot(2, 3, 5)
+    if not weekly_acc_df.empty:
+        plt.bar(range(len(weekly_acc_df)), weekly_acc_df['samples'], alpha=0.7)
+        plt.xlabel("数据点索引（按赛季和周排序）")
+        plt.ylabel("样本数量")
+        plt.title("各周样本数量分布")
+        plt.text(0.05, 0.95, f"总样本数: {len(valid_df)}", 
+                transform=plt.gca().transAxes, verticalalignment='top')
+    
+    # 子图6: 准确率与样本量关系
+    plt.subplot(2, 3, 6)
+    if not weekly_acc_df.empty and len(weekly_acc_df) > 5:
+        plt.scatter(weekly_acc_df['samples'], weekly_acc_df['accuracy'], 
+                   c=weekly_acc_df['week'], cmap='viridis', s=100, alpha=0.7)
+        plt.xlabel("样本数量")
+        plt.ylabel("准确率")
+        plt.title("准确率与样本量关系")
+        plt.colorbar(label='周次')
+        
+        # 添加趋势线
+        z = np.polyfit(weekly_acc_df['samples'], weekly_acc_df['accuracy'], 1)
+        p = np.poly1d(z)
+        x_range = np.linspace(weekly_acc_df['samples'].min(), weekly_acc_df['samples'].max(), 100)
+        plt.plot(x_range, p(x_range), "r--", alpha=0.5, label='趋势线')
+        plt.legend()
     
     plt.tight_layout()
     plt.savefig('Task1_High_Accuracy_Report.png', dpi=300)
-    print("✅ 图表已保存: Task1_High_Accuracy_Report.png")
+    print("\n✅ 图表已保存: Task1_High_Accuracy_Report.png")
     
-    return season_acc
+    # 保存每周准确率到Excel
+    if not weekly_acc_df.empty:
+        # 添加更多统计信息
+        weekly_acc_df['error_rate'] = 1 - weekly_acc_df['accuracy']
+        weekly_acc_df['prediction_correctness'] = weekly_acc_df['correct_predictions'] / weekly_acc_df['samples']
+        
+        weekly_acc_df.to_excel("Task1_Weekly_Accuracy.xlsx", index=False)
+        print("✅ 每周准确率数据已保存: Task1_Weekly_Accuracy.xlsx")
+    
+    return season_acc, weekly_acc_df
 
-season_stats = check_performance(df)
+season_stats, weekly_stats = check_performance(df)
 
-# 导出
+# 导出预测结果
 df.to_excel("Task1_Optimized_Result.xlsx", index=False)
+print("✅ 预测结果已保存: Task1_Optimized_Result.xlsx")
+
+# 打印汇总统计
+print("\n" + "="*80)
+print("🎯 预测性能汇总")
+print("="*80)
+
+if not weekly_stats.empty:
+    # 按周次统计
+    print("\n按周次统计:")
+    week_summary = weekly_stats.groupby('week').agg({
+        'accuracy': ['mean', 'std', 'min', 'max'],
+        'samples': 'sum'
+    }).round(4)
+    print(week_summary)
+    
+    # 按赛季统计
+    print("\n按赛季统计:")
+    season_summary = weekly_stats.groupby('season').agg({
+        'accuracy': ['mean', 'std', 'min', 'max'],
+        'samples': 'sum',
+        'correct_predictions': 'sum',
+        'incorrect_predictions': 'sum'
+    }).round(4)
+    print(season_summary)
