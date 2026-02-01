@@ -418,9 +418,9 @@ def check_performance(df):
     
     # 子图1: 概率分布
     plt.subplot(2, 3, 1)
-    sns.histplot(df[df['actual_eliminate']==1]['final_elim_prob'], color='red', label='实际被淘汰者', kde=True, bins=20)
-    sns.histplot(df[df['actual_eliminate']==0]['final_elim_prob'], color='green', label='实际晋级者', kde=True, bins=20, alpha=0.3)
-    plt.title("预测淘汰概率分布 (红绿分离度越高越好)")
+    sns.histplot(df[df['actual_eliminate']==1]['final_elim_prob'], color='red', label='Actual eliminators', kde=True, bins=20)
+    sns.histplot(df[df['actual_eliminate']==0]['final_elim_prob'], color='green', label='The actual finalist', kde=True, bins=20, alpha=0.3)
+    plt.title("Predicting the elimination probability distribution (higher red-green separation is better)")
     plt.legend()
     
     # 子图2: 各赛季预测准确率
@@ -428,8 +428,8 @@ def check_performance(df):
     season_acc = df.groupby('season').apply(lambda x: accuracy_score(x['actual_eliminate'], x['est_eliminate'])).reset_index()
     season_acc.columns = ['season', 'acc']
     sns.barplot(x='season', y='acc', data=season_acc, palette='viridis')
-    plt.axhline(y=acc, color='r', linestyle='--', label='总体平均准确率')
-    plt.title("各赛季预测准确率")
+    plt.axhline(y=acc, color='r', linestyle='--', label='Overall average accuracy')
+    plt.title("Prediction accuracy by season")
     plt.xticks(rotation=90, fontsize=8)
     plt.legend()
     
@@ -441,13 +441,13 @@ def check_performance(df):
         
         # 绘制热力图
         sns.heatmap(heatmap_data, annot=True, fmt='.2f', cmap='YlOrRd', 
-                   cbar_kws={'label': '准确率'}, vmin=0, vmax=1)
-        plt.title("每周预测准确率热力图")
-        plt.xlabel("周次")
-        plt.ylabel("赛季")
+                   cbar_kws={'label': 'accuracy'}, vmin=0, vmax=1)
+        plt.title("Heatmap of weekly prediction accuracy")
+        plt.xlabel("Time of week")
+        plt.ylabel("Season")
     else:
-        plt.text(0.5, 0.5, "无每周准确率数据", ha='center', va='center')
-        plt.title("每周预测准确率热力图")
+        plt.text(0.5, 0.5, "Weekly accuracy data is not available", ha='center', va='center')
+        plt.title("Heatmap of weekly prediction accuracy")
     
     # 子图4: 每周平均准确率趋势
     plt.subplot(2, 3, 4)
@@ -460,10 +460,10 @@ def check_performance(df):
                         week_avg_acc['mean'] - week_avg_acc['std'],
                         week_avg_acc['mean'] + week_avg_acc['std'],
                         alpha=0.2)
-        plt.axhline(y=avg_weekly_acc, color='r', linestyle='--', label=f'平均: {avg_weekly_acc:.2%}')
-        plt.xlabel("周次")
-        plt.ylabel("平均准确率")
-        plt.title("每周平均准确率趋势（带误差条）")
+        plt.axhline(y=avg_weekly_acc, color='r', linestyle='--', label=f'average: {avg_weekly_acc:.2%}')
+        plt.xlabel("Time of week")
+        plt.ylabel("Average precision")
+        plt.title("Trend of average weekly accuracy (with error bars)")
         plt.legend()
         plt.grid(True, alpha=0.3)
     
@@ -471,10 +471,10 @@ def check_performance(df):
     plt.subplot(2, 3, 5)
     if not weekly_acc_df.empty:
         plt.bar(range(len(weekly_acc_df)), weekly_acc_df['samples'], alpha=0.7)
-        plt.xlabel("数据点索引（按赛季和周排序）")
-        plt.ylabel("样本数量")
-        plt.title("各周样本数量分布")
-        plt.text(0.05, 0.95, f"总样本数: {len(valid_df)}", 
+        plt.xlabel("Index of data points (sorted by season and week)")
+        plt.ylabel("Number of samples")
+        plt.title("Distribution of the number of samples in each week")
+        plt.text(0.05, 0.95, f"Total number of samples: {len(valid_df)}", 
                 transform=plt.gca().transAxes, verticalalignment='top')
     
     # 子图6: 准确率与样本量关系
@@ -482,16 +482,16 @@ def check_performance(df):
     if not weekly_acc_df.empty and len(weekly_acc_df) > 5:
         plt.scatter(weekly_acc_df['samples'], weekly_acc_df['accuracy'], 
                    c=weekly_acc_df['week'], cmap='viridis', s=100, alpha=0.7)
-        plt.xlabel("样本数量")
-        plt.ylabel("准确率")
-        plt.title("准确率与样本量关系")
-        plt.colorbar(label='周次')
+        plt.xlabel("Number of samples")
+        plt.ylabel("accuracy")
+        plt.title("Accuracy versus sample size")
+        plt.colorbar(label='Time of week')
         
         # 添加趋势线
         z = np.polyfit(weekly_acc_df['samples'], weekly_acc_df['accuracy'], 1)
         p = np.poly1d(z)
         x_range = np.linspace(weekly_acc_df['samples'].min(), weekly_acc_df['samples'].max(), 100)
-        plt.plot(x_range, p(x_range), "r--", alpha=0.5, label='趋势线')
+        plt.plot(x_range, p(x_range), "r--", alpha=0.5, label='Trend line')
         plt.legend()
     
     plt.tight_layout()
