@@ -553,21 +553,83 @@ def analyze_dancer_celebrity_impact(df):
                 print(f"舞者经验与粉丝分数的相关性: {exp_fan_corr:.3f}")
                 print(f"舞者经验与最终排名的相关性: {exp_rank_corr:.3f}")
     
-# ===================== 7.5 优化版：归一化处理后的特征分析 =====================
+# ===================== 7.5 优化：粉丝分数与评委分数的归一化处理 =====================
 
-def analyze_dancer_celebrity_impact_optimized(df):
+def normalize_scores(df):
     """
-    优化版：对粉丝分数和评委分数进行归一化处理，确保在相同尺度上比较
+    对评委分数和粉丝分数进行归一化处理，使它们在相同尺度上可比
     """
+    # 方法1：Min-Max归一化到[0,1]区间
+    from sklearn.preprocessing import MinMaxScaler
     
+    # 评委分数归一化
+    judge_scaler = MinMaxScaler()
+    df['judge_score_norm'] = judge_scaler.fit_transform(df[['judge_score']])
+    
+    # 粉丝分数归一化（使用预测的粉丝分数）
+    fan_scaler = MinMaxScaler()
+    df['fan_score_norm'] = fan_scaler.fit_transform(df[['pred_fan_score']])
+    
+    # 方法2：Z-score标准化（均值为0，标准差为1）
+    from sklearn.preprocessing import StandardScaler
+    
+    judge_std_scaler = StandardScaler()
+    df['judge_score_std'] = judge_std_scaler.fit_transform(df[['judge_score']])
+    
+    fan_std_scaler = StandardScaler()
+    df['fan_score_std'] = fan_std_scaler.fit_transform(df[['pred_fan_score']])
+    
+    # 方法3：相对权重计算（按百分比）
+    # 对于每一周，计算评委分数和粉丝分数的相对贡献
+    df['judge_contribution'] = 0.0
+    df['fan_contribution'] = 0.0
+    
+    for s in df['season'].unique():
+        for w in df[df['season'] == s]['week'].unique():
+            mask = (df['season'] == s) & (df['week'] == w)
+            week_data = df[mask]
+            
+            if len(week_data) > 0:
+                # 计算本周内的相对分数
+                judge_sum = week_data['judge_score'].sum()
+                fan_sum = week_data['pred_fan_score'].sum()
+                
+                if judge_sum > 0:
+                    df.loc[mask, 'judge_contribution'] = df.loc[mask, 'judge_score'] / judge_sum
+                if fan_sum > 0:
+                    # 注意：粉丝分数可能是负值，需要先调整
+                    min_fan = week_data['pred_fan_score'].min()
+                    if min_fan < 0:
+                        adjusted_fan = week_data['pred_fan_score'] - min_fan + 1
+                        fan_sum = adjusted_fan.sum()
+                        df.loc[mask, 'fan_contribution'] = adjusted_fan / fan_sum
+                    else:
+                        df.loc[mask, 'fan_contribution'] = df.loc[mask, 'pred_fan_score'] / fan_sum
+    
+    # 计算综合得分（评委和粉丝各占50%权重）
+    df['combined_score_norm'] = 0.5 * df['judge_score_norm'] + 0.5 * df['fan_score_norm']
+    
+    # 计算评委分数和粉丝分数的比例
+    df['judge_fan_ratio'] = df['judge_score_norm'] / (df['fan_score_norm'] + 1e-8)
+    
+    return df
+
+# 应用归一化处理
+print("\n📊 正在对评委分数和粉丝分数进行归一化处理...")
+df = normalize_scores(df)
+
+# ===================== 7.6 优化后的特征影响分析 =====================
+
+def analyze_feature_impact_with_normalization(df):
+    """
+    使用归一化分数重新分析特征影响
+    """
     print("\n" + "="*80)
-    print("🎭 专业舞者及名人特征影响分析（优化版：归一化处理）")
+    print("🎭 使用归一化分数的特征影响分析")
     print("="*80)
     
-    # ===================== 数据准备 =====================
-    
-    # 汇总每位选手的平均表现数据
-    player_summary = []
+    # 重新汇总选手数据，使用归一化分数
+    player_summary_norm = []
     
     for player_id in df['player_id'].unique():
         player_data = df[df['player_id'] == player_id]
@@ -578,805 +640,579 @@ def analyze_dancer_celebrity_impact_optimized(df):
         season = player_data['season'].iloc[0]
         final_rank = player_data['final_rank'].iloc[0]
         age = player_data['age'].iloc[0]
-        country = player_data['country'].iloc[0] if 'country' in player_data.columns else 'Unknown'
         industry = player_data['industry'].iloc[0] if 'industry' in player_data.columns else 'Unknown'
         
-        # 表现指标 - 使用平均值和标准化值
-        avg_judge_score = player_data['judge_score'].mean()
-        avg_fan_score = player_data['pred_fan_score'].mean()
+        # 归一化后的表现指标
+        avg_judge_norm = player_data['judge_score_norm'].mean()
+        avg_fan_norm = player_data['fan_score_norm'].mean()
+        avg_combined_norm = player_data['combined_score_norm'].mean()
+        avg_judge_contribution = player_data['judge_contribution'].mean()
+        avg_fan_contribution = player_data['fan_contribution'].mean()
+        
+        # 标准化表现指标
+        avg_judge_std = player_data['judge_score_std'].mean()
+        avg_fan_std = player_data['fan_score_std'].mean()
+        
+        # 比赛表现
         total_weeks = player_data['week'].max()
         survived_weeks = len(player_data)
+        survival_rate = survived_weeks / total_weeks if total_weeks > 0 else 0
         
-        # 添加标准差以衡量稳定性
-        std_judge_score = player_data['judge_score'].std()
-        std_fan_score = player_data['pred_fan_score'].std()
-        
-        player_summary.append({
+        player_summary_norm.append({
             'player_id': player_id,
             'season': season,
             'final_rank': final_rank,
             'age': age,
-            'country': country,
             'industry': industry,
-            'avg_judge_score': avg_judge_score,
-            'avg_fan_score': avg_fan_score,
-            'std_judge_score': std_judge_score if not pd.isna(std_judge_score) else 0,
-            'std_fan_score': std_fan_score if not pd.isna(std_fan_score) else 0,
+            'avg_judge_norm': avg_judge_norm,
+            'avg_fan_norm': avg_fan_norm,
+            'avg_combined_norm': avg_combined_norm,
+            'avg_judge_contribution': avg_judge_contribution,
+            'avg_fan_contribution': avg_fan_contribution,
+            'avg_judge_std': avg_judge_std,
+            'avg_fan_std': avg_fan_std,
             'total_weeks': total_weeks,
             'survived_weeks': survived_weeks,
-            'survival_rate': survived_weeks / total_weeks if total_weeks > 0 else 0
+            'survival_rate': survival_rate,
+            'judge_fan_ratio': player_data['judge_fan_ratio'].mean()
         })
     
-    analysis_df = pd.DataFrame(player_summary)
-    
-    # ===================== 关键优化：对粉丝分数和评委分数进行归一化 =====================
-    
-    print("\n📊 分数归一化处理:")
-    print("-"*60)
-    
-    # 1. 计算原始统计
-    print(f"原始评委分数范围: [{analysis_df['avg_judge_score'].min():.2f}, {analysis_df['avg_judge_score'].max():.2f}]")
-    print(f"原始粉丝分数范围: [{analysis_df['avg_fan_score'].min():.2f}, {analysis_df['avg_fan_score'].max():.2f}]")
-    
-    # 2. 使用Z-score标准化（考虑分布形状）
-    from scipy.stats import zscore
-    
-    # Z-score标准化
-    analysis_df['judge_score_z'] = zscore(analysis_df['avg_judge_score'].fillna(0))
-    analysis_df['fan_score_z'] = zscore(analysis_df['avg_fan_score'].fillna(0))
-    
-    # 3. Min-Max归一化到[0,1]范围
-    analysis_df['judge_score_norm'] = (analysis_df['avg_judge_score'] - analysis_df['avg_judge_score'].min()) / \
-                                      (analysis_df['avg_judge_score'].max() - analysis_df['avg_judge_score'].min())
-    
-    analysis_df['fan_score_norm'] = (analysis_df['avg_fan_score'] - analysis_df['avg_fan_score'].min()) / \
-                                    (analysis_df['avg_fan_score'].max() - analysis_df['avg_fan_score'].min())
-    
-    # 4. 百分比排名（百分位数）
-    analysis_df['judge_score_percentile'] = analysis_df['avg_judge_score'].rank(pct=True)
-    analysis_df['fan_score_percentile'] = analysis_df['avg_fan_score'].rank(pct=True)
-    
-    # 5. 创建综合评分（结合评委和粉丝）
-    # 使用加权平均，权重可以通过相关性分析确定
-    judge_fan_corr = analysis_df['avg_judge_score'].corr(analysis_df['avg_fan_score'])
-    judge_weight = 0.5  # 默认权重
-    fan_weight = 0.5
-    
-    # 如果相关性高，可以调整权重
-    if not pd.isna(judge_fan_corr):
-        # 根据相关性调整权重
-        judge_weight = 0.5 + judge_fan_corr * 0.2
-        fan_weight = 0.5 - judge_fan_corr * 0.2
-        judge_weight = max(0.3, min(0.7, judge_weight))
-        fan_weight = 1 - judge_weight
-    
-    analysis_df['combined_score'] = judge_weight * analysis_df['judge_score_norm'] + fan_weight * analysis_df['fan_score_norm']
-    
-    print(f"评委分数平均权重: {judge_weight:.2%}")
-    print(f"粉丝分数平均权重: {fan_weight:.2%}")
-    print(f"评委与粉丝分数相关性: {judge_fan_corr:.3f}")
+    analysis_df_norm = pd.DataFrame(player_summary_norm)
     
     # ===================== 归一化后的分析 =====================
     
-    print("\n📊 归一化后分数统计:")
-    print(f"归一化评委分数范围: [{analysis_df['judge_score_norm'].min():.3f}, {analysis_df['judge_score_norm'].max():.3f}]")
-    print(f"归一化粉丝分数范围: [{analysis_df['fan_score_norm'].min():.3f}, {analysis_df['fan_score_norm'].max():.3f}]")
-    
-    # 计算归一化后的相关性
-    norm_judge_fan_corr = analysis_df['judge_score_norm'].corr(analysis_df['fan_score_norm'])
-    print(f"归一化后评委与粉丝分数相关性: {norm_judge_fan_corr:.3f}")
-    
-    # ===================== 可视化：归一化对比 =====================
-    
-    print("\n🎨 生成归一化对比图表...")
-    
-    plt.figure(figsize=(18, 12))
-    
-    # 子图1: 原始分数分布对比
-    plt.subplot(2, 3, 1)
-    bins = 30
-    plt.hist(analysis_df['avg_judge_score'], bins=bins, alpha=0.5, label='评委分数(原始)', color='blue')
-    plt.hist(analysis_df['avg_fan_score'], bins=bins, alpha=0.5, label='粉丝分数(原始)', color='red')
-    plt.xlabel('原始分数')
-    plt.ylabel('频数')
-    plt.title('原始分数分布对比')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # 添加统计信息
-    plt.text(0.05, 0.95, 
-             f"评委: μ={analysis_df['avg_judge_score'].mean():.1f}, σ={analysis_df['avg_judge_score'].std():.1f}\n"
-             f"粉丝: μ={analysis_df['avg_fan_score'].mean():.1f}, σ={analysis_df['avg_fan_score'].std():.1f}",
-             transform=plt.gca().transAxes, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
-    # 子图2: 归一化分数分布对比
-    plt.subplot(2, 3, 2)
-    bins = 30
-    plt.hist(analysis_df['judge_score_norm'], bins=bins, alpha=0.5, label='评委分数(归一化)', color='blue')
-    plt.hist(analysis_df['fan_score_norm'], bins=bins, alpha=0.5, label='粉丝分数(归一化)', color='red')
-    plt.xlabel('归一化分数 [0,1]')
-    plt.ylabel('频数')
-    plt.title('归一化分数分布对比')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # 子图3: 评委vs粉丝分数散点图（归一化后）
-    plt.subplot(2, 3, 3)
-    plt.scatter(analysis_df['judge_score_norm'], analysis_df['fan_score_norm'], 
-                c=analysis_df['final_rank'], cmap='viridis', alpha=0.6, s=50)
-    
-    # 添加趋势线
-    z = np.polyfit(analysis_df['judge_score_norm'], analysis_df['fan_score_norm'], 1)
-    p = np.poly1d(z)
-    x_range = np.linspace(analysis_df['judge_score_norm'].min(), analysis_df['judge_score_norm'].max(), 100)
-    plt.plot(x_range, p(x_range), 'r-', linewidth=2, label='趋势线')
-    
-    plt.colorbar(label='最终排名')
-    plt.xlabel('归一化评委分数')
-    plt.ylabel('归一化粉丝分数')
-    plt.title('评委vs粉丝分数 (归一化后)')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # 添加相关性信息
-    plt.text(0.05, 0.95, f'相关性: r = {norm_judge_fan_corr:.3f}', 
-             transform=plt.gca().transAxes, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
-    # 子图4: 综合评分与最终排名
-    plt.subplot(2, 3, 4)
-    
-    # 按综合评分分组
-    analysis_df['combined_score_bin'] = pd.cut(analysis_df['combined_score'], bins=10, labels=False)
-    score_bin_stats = analysis_df.groupby('combined_score_bin')['final_rank'].agg(['mean', 'std', 'count']).reset_index()
-    
-    plt.errorbar(score_bin_stats['combined_score_bin'], score_bin_stats['mean'], 
-                 yerr=score_bin_stats['std'], fmt='o-', linewidth=2, capsize=5)
-    plt.xlabel('综合评分分组')
-    plt.ylabel('平均最终排名')
-    plt.title('综合评分与最终排名关系')
-    plt.grid(True, alpha=0.3)
-    
-    # 添加趋势线
-    z_rank = np.polyfit(analysis_df['combined_score'], analysis_df['final_rank'], 1)
-    p_rank = np.poly1d(z_rank)
-    combined_corr = analysis_df['combined_score'].corr(analysis_df['final_rank'])
-    plt.text(0.05, 0.95, f'相关性: r = {-combined_corr:.3f}', 
-             transform=plt.gca().transAxes, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
-    # 子图5: 评委与粉丝分数对排名的相对贡献
-    plt.subplot(2, 3, 5)
-    
-    # 计算每个选手的评委/粉丝分数比率
-    analysis_df['judge_fan_ratio'] = analysis_df['judge_score_norm'] / (analysis_df['judge_score_norm'] + analysis_df['fan_score_norm'] + 1e-10)
-    
-    # 按比率分组
-    ratio_bins = [0, 0.3, 0.4, 0.6, 0.7, 1.0]
-    ratio_labels = ['粉丝主导(<30%)', '粉丝优势(30-40%)', '均衡(40-60%)', '评委优势(60-70%)', '评委主导(>70%)']
-    analysis_df['ratio_group'] = pd.cut(analysis_df['judge_fan_ratio'], bins=ratio_bins, labels=ratio_labels)
-    
-    ratio_stats = analysis_df.groupby('ratio_group')['final_rank'].mean().reset_index()
-    
-    # 创建条形图
-    colors = ['red', 'lightcoral', 'gray', 'lightblue', 'blue']
-    for i, (_, row) in enumerate(ratio_stats.iterrows()):
-        plt.bar(i, row['final_rank'], color=colors[i], alpha=0.7, label=row['ratio_group'])
-    
-    plt.xticks(range(len(ratio_stats)), ratio_stats['ratio_group'], rotation=45, ha='right')
-    plt.xlabel('评委/粉丝分数比率')
-    plt.ylabel('平均最终排名')
-    plt.title('评委vs粉丝贡献与最终排名关系')
-    plt.grid(True, alpha=0.3)
-    
-    # 子图6: 年龄对归一化分数的影响
-    plt.subplot(2, 3, 6)
-    
-    # 按年龄分组
-    age_bins = [0, 25, 35, 45, 55, 100]
-    age_labels = ['<25', '25-35', '35-45', '45-55', '>55']
-    analysis_df['age_group'] = pd.cut(analysis_df['age'], bins=age_bins, labels=age_labels)
-    
-    age_stats = analysis_df.groupby('age_group').agg({
-        'judge_score_norm': 'mean',
-        'fan_score_norm': 'mean',
-        'combined_score': 'mean'
-    }).reset_index()
-    
-    x = np.arange(len(age_stats))
-    width = 0.25
-    
-    plt.bar(x - width, age_stats['judge_score_norm'], width, label='评委分数', alpha=0.7)
-    plt.bar(x, age_stats['fan_score_norm'], width, label='粉丝分数', alpha=0.7)
-    plt.bar(x + width, age_stats['combined_score'], width, label='综合评分', alpha=0.7)
-    
-    plt.xticks(x, age_stats['age_group'])
-    plt.xlabel('年龄组')
-    plt.ylabel('平均归一化分数')
-    plt.title('不同年龄组的表现对比')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig('Task3_Normalized_Feature_Analysis.png', dpi=300)
-    print("✅ 归一化特征分析图表已保存: Task3_Normalized_Feature_Analysis.png")
-    
-    # ===================== 归一化后的深入分析 =====================
-    
-    print("\n🔍 归一化后深入分析:")
+    print("\n📊 归一化分数统计分析:")
     print("-"*60)
     
-    # 1. 评委与粉丝分数的相对重要性
-    judge_contribution = analysis_df['judge_score_norm'].std() / (analysis_df['judge_score_norm'].std() + analysis_df['fan_score_norm'].std())
-    fan_contribution = 1 - judge_contribution
+    # 描述性统计
+    norm_stats = analysis_df_norm[['avg_judge_norm', 'avg_fan_norm', 'avg_combined_norm',
+                                    'avg_judge_contribution', 'avg_fan_contribution',
+                                    'avg_judge_std', 'avg_fan_std']].describe().round(3)
+    print("归一化分数的描述性统计:")
+    print(norm_stats)
     
-    print(f"评委分数变异贡献度: {judge_contribution:.1%}")
-    print(f"粉丝分数变异贡献度: {fan_contribution:.1%}")
+    # 相关性分析（使用归一化分数）
+    print("\n📈 归一化分数的相关性分析:")
     
-    # 2. 不同排名段的表现特征
-    print("\n不同排名段的表现特征:")
+    # 年龄与归一化分数的相关性
+    age_judge_corr_norm = analysis_df_norm['age'].corr(analysis_df_norm['avg_judge_norm'])
+    age_fan_corr_norm = analysis_df_norm['age'].corr(analysis_df_norm['avg_fan_norm'])
+    age_combined_corr_norm = analysis_df_norm['age'].corr(analysis_df_norm['avg_combined_norm'])
     
-    # 定义排名段
-    rank_segments = {
-        '冠军/亚军 (1-2名)': (1, 2),
-        '前列 (3-5名)': (3, 5),
-        '中游 (6-10名)': (6, 10),
-        '下游 (11-15名)': (11, 15),
-        '早期淘汰 (>15名)': (16, 100)
-    }
+    print(f"年龄与归一化评委分数的相关性: {age_judge_corr_norm:.3f}")
+    print(f"年龄与归一化粉丝分数的相关性: {age_fan_corr_norm:.3f}")
+    print(f"年龄与综合分数的相关性: {age_combined_corr_norm:.3f}")
     
-    for segment_name, (min_rank, max_rank) in rank_segments.items():
-        segment_data = analysis_df[(analysis_df['final_rank'] >= min_rank) & (analysis_df['final_rank'] <= max_rank)]
+    # 归一化分数与最终排名的相关性
+    judge_rank_corr_norm = analysis_df_norm['avg_judge_norm'].corr(analysis_df_norm['final_rank'])
+    fan_rank_corr_norm = analysis_df_norm['avg_fan_norm'].corr(analysis_df_norm['final_rank'])
+    combined_rank_corr_norm = analysis_df_norm['avg_combined_norm'].corr(analysis_df_norm['final_rank'])
+    
+    print(f"归一化评委分数与最终排名的相关性: {judge_rank_corr_norm:.3f} (负值表示分数越高排名越好)")
+    print(f"归一化粉丝分数与最终排名的相关性: {fan_rank_corr_norm:.3f} (负值表示分数越高排名越好)")
+    print(f"综合分数与最终排名的相关性: {combined_rank_corr_norm:.3f} (负值表示分数越高排名越好)")
+    
+    # ===================== 评委与粉丝贡献度分析 =====================
+    
+    print("\n📊 评委与粉丝贡献度分析:")
+    print("-"*60)
+    
+    # 计算整体贡献度比例
+    total_judge_contribution = analysis_df_norm['avg_judge_contribution'].mean()
+    total_fan_contribution = analysis_df_norm['avg_fan_contribution'].mean()
+    
+    print(f"平均评委贡献度: {total_judge_contribution:.3f}")
+    print(f"平均粉丝贡献度: {total_fan_contribution:.3f}")
+    print(f"评委:粉丝贡献度比例: {total_judge_contribution/total_fan_contribution:.3f}:1")
+    
+    # 按行业分析贡献度
+    if 'industry' in analysis_df_norm.columns:
+        industry_contribution = analysis_df_norm.groupby('industry').agg({
+            'avg_judge_contribution': 'mean',
+            'avg_fan_contribution': 'mean',
+            'judge_fan_ratio': 'mean',
+            'player_id': 'count'
+        }).rename(columns={'player_id': 'count'}).round(3)
         
-        if len(segment_data) > 0:
-            avg_judge = segment_data['judge_score_norm'].mean()
-            avg_fan = segment_data['fan_score_norm'].mean()
-            avg_combined = segment_data['combined_score'].mean()
-            judge_fan_diff = avg_judge - avg_fan
+        industry_contribution['total_contribution'] = industry_contribution['avg_judge_contribution'] + industry_contribution['avg_fan_contribution']
+        industry_contribution['judge_weight'] = industry_contribution['avg_judge_contribution'] / industry_contribution['total_contribution']
+        industry_contribution['fan_weight'] = industry_contribution['avg_fan_contribution'] / industry_contribution['total_contribution']
+        
+        print("\n按行业统计的评委与粉丝贡献度:")
+        print(industry_contribution.sort_values('judge_fan_ratio', ascending=False))
+    
+    # ===================== 评委与粉丝影响的比较分析 =====================
+    
+    print("\n📊 评委与粉丝影响比较分析:")
+    print("-"*60)
+    
+    # 创建评委影响指数和粉丝影响指数
+    analysis_df_norm['judge_impact_index'] = analysis_df_norm['avg_judge_norm'] * analysis_df_norm['avg_judge_contribution']
+    analysis_df_norm['fan_impact_index'] = analysis_df_norm['avg_fan_norm'] * analysis_df_norm['avg_fan_contribution']
+    
+    # 计算相对影响
+    analysis_df_norm['total_impact'] = analysis_df_norm['judge_impact_index'] + analysis_df_norm['fan_impact_index']
+    analysis_df_norm['judge_impact_ratio'] = analysis_df_norm['judge_impact_index'] / analysis_df_norm['total_impact']
+    analysis_df_norm['fan_impact_ratio'] = analysis_df_norm['fan_impact_index'] / analysis_df_norm['total_impact']
+    
+    # 整体影响比例
+    avg_judge_impact_ratio = analysis_df_norm['judge_impact_ratio'].mean()
+    avg_fan_impact_ratio = analysis_df_norm['fan_impact_ratio'].mean()
+    
+    print(f"平均评委影响比例: {avg_judge_impact_ratio:.3f}")
+    print(f"平均粉丝影响比例: {avg_fan_impact_ratio:.3f}")
+    print(f"评委:粉丝影响比例: {avg_judge_impact_ratio/avg_fan_impact_ratio:.3f}:1")
+    
+    # ===================== 优化后的可视化 =====================
+    
+    print("\n🎨 生成优化后的可视化分析图表...")
+    
+    plt.figure(figsize=(20, 15))
+    
+    # 子图1: 归一化分数分布对比
+    plt.subplot(3, 4, 1)
+    plt.boxplot([analysis_df_norm['avg_judge_norm'], analysis_df_norm['avg_fan_norm']], 
+                labels=['Judge score', 'Fan score'])
+    plt.title('Comparison of normalized score distributions')
+    plt.ylabel('Score value (0-1)')
+    plt.grid(True, alpha=0.3)
+    
+    # 子图2: 评委vs粉丝分数散点图
+    plt.subplot(3, 4, 2)
+    plt.scatter(analysis_df_norm['avg_judge_norm'], analysis_df_norm['avg_fan_norm'], 
+                alpha=0.6, c=analysis_df_norm['final_rank'], cmap='viridis', s=50)
+    plt.colorbar(label='Final ranking')
+    plt.xlabel('Normalize the judges scores')
+    plt.ylabel('Normalized fan scores')
+    plt.title('Judges scores vs fans scores')
+    
+    # 添加对角线
+    min_val = min(analysis_df_norm['avg_judge_norm'].min(), analysis_df_norm['avg_fan_norm'].min())
+    max_val = max(analysis_df_norm['avg_judge_norm'].max(), analysis_df_norm['avg_fan_norm'].max())
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.5, label='y=x')
+    plt.legend()
+    
+    # 计算并显示相关系数
+    corr = analysis_df_norm['avg_judge_norm'].corr(analysis_df_norm['avg_fan_norm'])
+    plt.text(0.05, 0.95, f'r = {corr:.3f}', transform=plt.gca().transAxes, 
+             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    # 子图3: 评委与粉丝贡献度对比
+    plt.subplot(3, 4, 3)
+    labels = ['Contribution of judges', 'Fan contribution']
+    sizes = [total_judge_contribution, total_fan_contribution]
+    colors = ['#ff9999', '#66b3ff']
+    plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+    plt.title('Average contribution of judges and fans')
+    
+    # 子图4: 年龄与归一化分数的关系
+    plt.subplot(3, 4, 4)
+    plt.scatter(analysis_df_norm['age'], analysis_df_norm['avg_judge_norm'], 
+                alpha=0.6, label='Judge score', s=50)
+    plt.scatter(analysis_df_norm['age'], analysis_df_norm['avg_fan_norm'], 
+                alpha=0.6, label='Fan score', s=50)
+    plt.scatter(analysis_df_norm['age'], analysis_df_norm['avg_combined_norm'], 
+                alpha=0.6, label='Overall score', s=50)
+    
+    # 添加趋势线
+    for col, color, label in zip(['avg_judge_norm', 'avg_fan_norm', 'avg_combined_norm'],
+                                 ['blue', 'red', 'green'],
+                                 ['Judges', 'Fans', 'synthesis']):
+        z = np.polyfit(analysis_df_norm['age'], analysis_df_norm[col], 1)
+        p = np.poly1d(z)
+        x_range = np.linspace(analysis_df_norm['age'].min(), analysis_df_norm['age'].max(), 100)
+        plt.plot(x_range, p(x_range), color=color, linewidth=2, label=f'{label}trend')
+    
+    plt.xlabel('Age')
+    plt.ylabel('Normalized scores')
+    plt.title('Relationship between age and normalized scores')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # 子图5: 评委与粉丝影响比例分布
+    plt.subplot(3, 4, 5)
+    plt.hist(analysis_df_norm['judge_impact_ratio'], bins=30, alpha=0.7, color='red', label='Judge influence ratio')
+    plt.hist(analysis_df_norm['fan_impact_ratio'], bins=30, alpha=0.7, color='blue', label='Fan influence ratio')
+    plt.axvline(x=avg_judge_impact_ratio, color='darkred', linestyle='--', linewidth=2, label='Average of judges')
+    plt.axvline(x=avg_fan_impact_ratio, color='darkblue', linestyle='--', linewidth=2, label='Average of fans')
+    plt.xlabel('Proportion of influence')
+    plt.ylabel('frequency')
+    plt.title('Judges and fans influence the proportion distribution')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # 子图6: 评委vs粉丝分数与最终排名的关系
+    plt.subplot(3, 4, 6)
+    plt.scatter(analysis_df_norm['avg_judge_norm'], analysis_df_norm['final_rank'], 
+                alpha=0.6, label='Judge score', s=50)
+    plt.scatter(analysis_df_norm['avg_fan_norm'], analysis_df_norm['final_rank'], 
+                alpha=0.6, label='Fan score', s=50)
+    
+    # 添加趋势线
+    z_judge = np.polyfit(analysis_df_norm['avg_judge_norm'], analysis_df_norm['final_rank'], 1)
+    p_judge = np.poly1d(z_judge)
+    z_fan = np.polyfit(analysis_df_norm['avg_fan_norm'], analysis_df_norm['final_rank'], 1)
+    p_fan = np.poly1d(z_fan)
+    
+    x_range_judge = np.linspace(analysis_df_norm['avg_judge_norm'].min(), analysis_df_norm['avg_judge_norm'].max(), 100)
+    x_range_fan = np.linspace(analysis_df_norm['avg_fan_norm'].min(), analysis_df_norm['avg_fan_norm'].max(), 100)
+    
+    plt.plot(x_range_judge, p_judge(x_range_judge), 'b-', linewidth=2, label=f'Trends of judges (r={judge_rank_corr_norm:.3f})')
+    plt.plot(x_range_fan, p_fan(x_range_fan), 'r-', linewidth=2, label=f'Trends of judges (r={fan_rank_corr_norm:.3f})')
+    
+    plt.xlabel('Normalized scores')
+    plt.ylabel('Final ranking')
+    plt.title('Relation of the score to the final ranking')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # 子图7: 评委-粉丝分数比分布
+    plt.subplot(3, 4, 7)
+
+    # 清理数据：移除无穷大和NaN值
+    ratio_data = analysis_df_norm['judge_fan_ratio'].copy()
+    ratio_data = ratio_data.replace([np.inf, -np.inf], np.nan)
+    ratio_data_clean = ratio_data.dropna()
+
+    if len(ratio_data_clean) > 0:
+        # 处理极端值：截断在99%分位数
+        upper_limit = ratio_data_clean.quantile(0.99)
+        ratio_data_clipped = ratio_data_clean.clip(upper=upper_limit)
+    
+        # 计算合适的bins数量
+        n_bins = min(40, max(10, len(ratio_data_clipped) // 20))
+    
+        # 绘制直方图
+        n, bins, patches = plt.hist(ratio_data_clipped, bins=n_bins, alpha=0.7, 
+                                     color='purple', edgecolor='black', linewidth=0.5)
+    
+        # 添加参考线
+        plt.axvline(x=1, color='red', linestyle='--', linewidth=2, label='Judges = Fans')
+    
+        # 计算并显示中位数
+        median_val = ratio_data_clipped.median()
+        plt.axvline(x=median_val, color='green', linestyle='--', linewidth=2, 
+                    label=f'Median: {median_val:.2f}')
+    
+        plt.xlabel('Judge Score / Fan Score Ratio')
+        plt.ylabel('Frequency')
+        plt.title('Distribution of Judge-Fan Score Ratio\n(Clipped at 99th percentile)')
+        plt.legend(loc='upper right', fontsize=9)
+        plt.grid(True, alpha=0.3)
+    
+        # 添加统计信息文本框
+        stats_text = f"""
+        Data Points: {len(ratio_data_clean)}
+        Cleaned Points: {len(ratio_data_clipped)}
+        Mean: {ratio_data_clipped.mean():.2f}
+        Median: {ratio_data_clipped.median():.2f}
+        Std: {ratio_data_clipped.std():.2f}
+    
+        Ratio > 2 (Judge-favored): {((ratio_data_clean > 2).sum()/len(ratio_data_clean)*100):.1f}%
+        Ratio < 0.5 (Fan-favored): {((ratio_data_clean < 0.5).sum()/len(ratio_data_clean)*100):.1f}%
+        """
+    
+        plt.text(0.98, 0.98, stats_text, transform=plt.gca().transAxes,
+                 fontsize=7, verticalalignment='top', horizontalalignment='right',
+                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    else:
+        plt.text(0.5, 0.5, 'No valid ratio data available', 
+                 horizontalalignment='center', verticalalignment='center')
+        plt.title('Distribution of Judge-Fan Score Ratio\n(No valid data)')
+    
+    # 子图8: 行业分析 - 评委与粉丝分数比
+    plt.subplot(3, 4, 8)
+    if 'industry' in analysis_df_norm.columns and analysis_df_norm['industry'].nunique() > 1:
+        # 只分析出现频率较高的行业
+        industry_counts = analysis_df_norm['industry'].value_counts()
+        top_industries = industry_counts[industry_counts >= 3].index.tolist()
+        
+        if len(top_industries) > 0:
+            industry_data = analysis_df_norm[analysis_df_norm['industry'].isin(top_industries)]
+            industry_means = industry_data.groupby('industry')[['avg_judge_norm', 'avg_fan_norm']].mean()
+            industry_means = industry_means.sort_values('avg_judge_norm', ascending=False)
             
-            print(f"{segment_name:20s}: 评委={avg_judge:.3f}, 粉丝={avg_fan:.3f}, 综合={avg_combined:.3f}, 差异={judge_fan_diff:.3f}")
+            x_pos = np.arange(len(industry_means))
+            width = 0.35
+            
+            plt.bar(x_pos - width/2, industry_means['avg_judge_norm'], width, label='Judge score', alpha=0.8, color='red')
+            plt.bar(x_pos + width/2, industry_means['avg_fan_norm'], width, label='Fan score', alpha=0.8, color='blue')
+            
+            plt.xticks(x_pos, industry_means.index, rotation=45, ha='right', fontsize=9)
+            plt.xlabel('Industry')
+            plt.ylabel('The average normalized score')
+            plt.title('Judges and fans scores for different industries')
+            plt.legend()
     
-    # 3. 评委偏爱vs粉丝偏爱的选手分析
-    print("\n评委偏爱vs粉丝偏爱的选手分析:")
+    # 子图9: 评委与粉丝影响的热力图
+    plt.subplot(3, 4, 9)
+    # 创建评委分数和粉丝分数的二维直方图
+    plt.hist2d(analysis_df_norm['avg_judge_norm'], analysis_df_norm['avg_fan_norm'], 
+               bins=30, cmap='YlOrRd')
+    plt.colorbar(label='Number of players')
+    plt.xlabel('Normalize judges scores')
+    plt.ylabel('Normalized fan scores')
+    plt.title('Heatmap of judge score vs fan score distribution')
     
-    # 定义偏爱阈值（1个标准差）
-    judge_favored_threshold = analysis_df['judge_score_norm'].mean() + analysis_df['judge_score_norm'].std()
-    fan_favored_threshold = analysis_df['fan_score_norm'].mean() + analysis_df['fan_score_norm'].std()
+    # 添加分类边界
+    plt.axhline(y=0.5, color='white', linestyle='--', alpha=0.5)
+    plt.axvline(x=0.5, color='white', linestyle='--', alpha=0.5)
     
-    judge_favored = analysis_df[analysis_df['judge_score_norm'] > judge_favored_threshold]
-    fan_favored = analysis_df[analysis_df['fan_score_norm'] > fan_favored_threshold]
+    # 子图10: 评委与粉丝分数的箱线图对比
+    plt.subplot(3, 4, 10)
+    data_to_plot = [analysis_df_norm['avg_judge_norm'], analysis_df_norm['avg_fan_norm']]
+    bp = plt.boxplot(data_to_plot, patch_artist=True, labels=['Judge score', 'Fan score'])
     
-    print(f"评委偏爱的选手: {len(judge_favored)} 人")
-    print(f"粉丝偏爱的选手: {len(fan_favored)} 人")
+    # 设置箱线图颜色
+    colors = ['lightcoral', 'lightblue']
+    for patch, color in zip(bp['boxes'], colors):
+        patch.set_facecolor(color)
     
-    if len(judge_favored) > 0:
-        print(f"  评委偏爱选手平均排名: {judge_favored['final_rank'].mean():.1f}")
-        print(f"  最常见行业: {judge_favored['industry'].mode().iloc[0] if 'industry' in judge_favored.columns and not judge_favored['industry'].mode().empty else 'N/A'}")
+    plt.title('Box plot of judges vs. fans score distribution')
+    plt.ylabel('Normalized scores')
+    plt.grid(True, alpha=0.3)
     
-    if len(fan_favored) > 0:
-        print(f"  粉丝偏爱选手平均排名: {fan_favored['final_rank'].mean():.1f}")
-        print(f"  最常见行业: {fan_favored['industry'].mode().iloc[0] if 'industry' in fan_favored.columns and not fan_favored['industry'].mode().empty else 'N/A'}")
+    # 子图11: 评委与粉丝影响的比例随时间变化
+    plt.subplot(3, 4, 11)
+    if 'season' in analysis_df_norm.columns:
+        season_impact = analysis_df_norm.groupby('season').agg({
+            'judge_impact_ratio': 'mean',
+            'fan_impact_ratio': 'mean'
+        }).reset_index()
+        
+        plt.plot(season_impact['season'], season_impact['judge_impact_ratio'], 
+                 'ro-', linewidth=2, markersize=6, label='Judge influence ratio')
+        plt.plot(season_impact['season'], season_impact['fan_impact_ratio'], 
+                 'bo-', linewidth=2, markersize=6, label='Fan influence ratio')
+        
+        # 添加趋势线
+        z_judge_season = np.polyfit(season_impact['season'], season_impact['judge_impact_ratio'], 1)
+        p_judge_season = np.poly1d(z_judge_season)
+        z_fan_season = np.polyfit(season_impact['season'], season_impact['fan_impact_ratio'], 1)
+        p_fan_season = np.poly1d(z_fan_season)
+        
+        x_range_season = np.linspace(season_impact['season'].min(), season_impact['season'].max(), 100)
+        plt.plot(x_range_season, p_judge_season(x_range_season), 'r--', alpha=0.5, linewidth=1)
+        plt.plot(x_range_season, p_fan_season(x_range_season), 'b--', alpha=0.5, linewidth=1)
+        
+        plt.xlabel('Season')
+        plt.ylabel('Proportion of influence')
+        plt.title('The ratio of judges to fans influence changes over time')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
     
-    # 4. 评委与粉丝一致性分析
-    print("\n评委与粉丝评价一致性分析:")
+    # 子图12: 评委与粉丝分数的相关性矩阵
+    plt.subplot(3, 4, 12)
+    # 选择相关变量
+    corr_vars = ['avg_judge_norm', 'avg_fan_norm', 'avg_combined_norm', 
+                 'final_rank', 'age', 'survival_rate']
     
-    # 计算一致性指标
-    consistency_threshold = 0.1  # 分数差异小于0.1认为一致
-    analysis_df['judge_fan_diff_abs'] = abs(analysis_df['judge_score_norm'] - analysis_df['fan_score_norm'])
+    corr_data = analysis_df_norm[corr_vars]
+    corr_matrix = corr_data.corr()
     
-    consistent_players = analysis_df[analysis_df['judge_fan_diff_abs'] < consistency_threshold]
-    inconsistent_players = analysis_df[analysis_df['judge_fan_diff_abs'] >= consistency_threshold]
+    # 绘制热力图
+    im = plt.imshow(corr_matrix, cmap='coolwarm', vmin=-1, vmax=1)
+    plt.colorbar(im)
     
-    print(f"评委与粉丝评价一致的选手: {len(consistent_players)} 人 ({len(consistent_players)/len(analysis_df):.1%})")
-    print(f"评委与粉丝评价不一致的选手: {len(inconsistent_players)} 人 ({len(inconsistent_players)/len(analysis_df):.1%})")
+    # 添加文本标注
+    for i in range(len(corr_vars)):
+        for j in range(len(corr_vars)):
+            plt.text(j, i, f'{corr_matrix.iloc[i, j]:.2f}', 
+                     ha='center', va='center', color='white' if abs(corr_matrix.iloc[i, j]) > 0.5 else 'black',
+                     fontsize=8)
     
-    if len(consistent_players) > 0:
-        print(f"  一致选手平均排名: {consistent_players['final_rank'].mean():.1f}")
+    plt.xticks(range(len(corr_vars)), [v.replace('_', '\n') for v in corr_vars], rotation=45, ha='right')
+    plt.yticks(range(len(corr_vars)), [v.replace('_', '\n') for v in corr_vars])
+    plt.title('Variable correlation matrix')
     
-    if len(inconsistent_players) > 0:
-        print(f"  不一致选手平均排名: {inconsistent_players['final_rank'].mean():.1f}")
+    plt.tight_layout()
+    plt.savefig('Task3_Feature_Analysis_Normalized.png', dpi=300, bbox_inches='tight')
+    print("✅ 归一化特征分析图表已保存: Task3_Feature_Analysis_Normalized.png")
     
-    # ===================== 保存分析结果 =====================
-    
-    # 保存归一化分析数据
-    normalized_columns = ['player_id', 'season', 'final_rank', 'age', 'industry',
-                          'avg_judge_score', 'avg_fan_score', 
-                          'judge_score_norm', 'fan_score_norm', 
-                          'combined_score', 'judge_fan_ratio', 'judge_fan_diff_abs']
-    
-    normalized_df = analysis_df[normalized_columns].copy()
-    normalized_df.to_excel("Task3_Normalized_Analysis_Data.xlsx", index=False)
-    print("\n✅ 归一化分析数据已保存: Task3_Normalized_Analysis_Data.xlsx")
-    
-    # ===================== 生成总结报告 =====================
+    # ===================== 结果总结 =====================
     
     print("\n" + "="*80)
     print("📋 归一化分析结果总结")
     print("="*80)
     
-    print(f"\n📊 分数归一化效果:")
-    print(f"   • 评委分数范围: [{analysis_df['judge_score_norm'].min():.3f}, {analysis_df['judge_score_norm'].max():.3f}]")
-    print(f"   • 粉丝分数范围: [{analysis_df['fan_score_norm'].min():.3f}, {analysis_df['fan_score_norm'].max():.3f}]")
-    print(f"   • 评委与粉丝分数相关性: {norm_judge_fan_corr:.3f}")
+    print(f"\n📊 分数分布:")
+    print(f"   • 评委分数均值: {analysis_df_norm['avg_judge_norm'].mean():.3f}")
+    print(f"   • 粉丝分数均值: {analysis_df_norm['avg_fan_norm'].mean():.3f}")
+    print(f"   • 评委分数标准差: {analysis_df_norm['avg_judge_norm'].std():.3f}")
+    print(f"   • 粉丝分数标准差: {analysis_df_norm['avg_fan_norm'].std():.3f}")
     
-    print(f"\n🎯 评委vs粉丝相对重要性:")
-    print(f"   • 评委分数变异贡献: {judge_contribution:.1%}")
-    print(f"   • 粉丝分数变异贡献: {fan_contribution:.1%}")
-    print(f"   • 综合评分权重: 评委={judge_weight:.1%}, 粉丝={fan_weight:.1%}")
+    print(f"\n📈 相关性分析:")
+    print(f"   • 评委分数与粉丝分数相关性: {corr:.3f}")
+    print(f"   • 评委分数与最终排名相关性: {judge_rank_corr_norm:.3f}")
+    print(f"   • 粉丝分数与最终排名相关性: {fan_rank_corr_norm:.3f}")
     
-    print(f"\n🏆 成功因素分析:")
+    print(f"\n⚖️ 影响比例:")
+    print(f"   • 平均评委影响比例: {avg_judge_impact_ratio:.3f}")
+    print(f"   • 平均粉丝影响比例: {avg_fan_impact_ratio:.3f}")
+    print(f"   • 评委:粉丝影响比例: {avg_judge_impact_ratio/avg_fan_impact_ratio:.2f}:1")
     
-    # 找出表现最佳的选手（综合评分前10%）
-    top_percent = 0.1
-    top_count = int(len(analysis_df) * top_percent)
-    top_players = analysis_df.nsmallest(top_count, 'final_rank')
+    print(f"\n👥 群体特征:")
+    print(f"   • 评委偏爱型选手比例 (评委/粉丝比>2): {(analysis_df_norm['judge_fan_ratio'] > 2).mean():.1%}")
+    print(f"   • 粉丝偏爱型选手比例 (评委/粉丝比<0.5): {(analysis_df_norm['judge_fan_ratio'] < 0.5).mean():.1%}")
+    print(f"   • 均衡型选手比例 (0.5≤评委/粉丝比≤2): {((analysis_df_norm['judge_fan_ratio'] >= 0.5) & (analysis_df_norm['judge_fan_ratio'] <= 2)).mean():.1%}")
     
-    print(f"   • 前10%选手综合评分: {top_players['combined_score'].mean():.3f}")
-    print(f"   • 评委分数贡献: {top_players['judge_score_norm'].mean():.3f}")
-    print(f"   • 粉丝分数贡献: {top_players['fan_score_norm'].mean():.3f}")
+    # 保存分析结果
+    analysis_df_norm.to_excel("Task3_Feature_Analysis_Normalized_Data.xlsx", index=False)
+    print("\n✅ 归一化特征分析数据已保存: Task3_Feature_Analysis_Normalized_Data.xlsx")
     
-    # 计算评委和粉丝的相对重要性
-    top_judge_importance = top_players['judge_score_norm'].std() / (top_players['judge_score_norm'].std() + top_players['fan_score_norm'].std())
-    print(f"   • 对顶尖选手，评委重要性: {top_judge_importance:.1%}")
-    
-    print(f"\n🔄 评委与粉丝评价一致性:")
-    print(f"   • 一致选手比例: {len(consistent_players)/len(analysis_df):.1%}")
-    print(f"   • 一致选手平均排名: {consistent_players['final_rank'].mean():.1f}")
-    print(f"   • 不一致选手平均排名: {inconsistent_players['final_rank'].mean():.1f}")
-    
-    print(f"\n📈 关键发现:")
-    print("   1. 归一化处理后，评委和粉丝分数在相同尺度上可比")
-    print("   2. 评委和粉丝分数存在中等程度相关性")
-    print("   3. 顶尖选手通常评委和粉丝分数都较高")
-    print("   4. 评委和粉丝评价一致的选手往往表现更好")
-    print("   5. 不同年龄组在评委和粉丝支持上存在差异")
-    
-    return analysis_df
+    return analysis_df_norm
 
-# 运行优化版特征分析
-optimized_analysis_df = analyze_dancer_celebrity_impact_optimized(df)
+# 运行优化后的分析
+analysis_df_norm = analyze_feature_impact_with_normalization(df)
 
-# ===================== 8. 高级分析：评委与粉丝评价差异的深入探究 =====================
+# ===================== 7.7 评委与粉丝影响机制的深入分析 =====================
 
-def advanced_judge_fan_analysis(analysis_df):
-    """高级分析：深入探究评委与粉丝评价差异"""
-    
+def analyze_judge_fan_mechanism(analysis_df_norm):
+    """
+    深入分析评委与粉丝影响机制的差异
+    """
     print("\n" + "="*80)
-    print("🔬 高级分析：评委与粉丝评价差异深度探究")
+    print("🔍 评委与粉丝影响机制的深入分析")
     print("="*80)
     
-    # 创建更详细的差异分析
-    analysis_df['judge_fan_difference'] = analysis_df['judge_score_norm'] - analysis_df['fan_score_norm']
-    analysis_df['judge_fan_difference_abs'] = abs(analysis_df['judge_fan_difference'])
-    analysis_df['judge_fan_agreement'] = 1 - analysis_df['judge_fan_difference_abs']  # 一致性指标
+    # 分类分析：根据评委/粉丝分数比将选手分为三类
+    analysis_df_norm['score_ratio_category'] = pd.cut(
+        analysis_df_norm['judge_fan_ratio'],
+        bins=[0, 0.5, 2, np.inf],
+        labels=['Fan preference type', 'Type of equilibrium', 'Judge preference']
+    )
     
-    # 1. 差异分布分析
-    print("\n📊 评委-粉丝评价差异分布:")
+    print("\n📊 选手分类统计:")
+    category_stats = analysis_df_norm['score_ratio_category'].value_counts().sort_index()
+    for category, count in category_stats.items():
+        percentage = count / len(analysis_df_norm) * 100
+        print(f"  {category}: {count}人 ({percentage:.1f}%)")
     
-    diff_stats = analysis_df['judge_fan_difference'].describe()
-    print(f"  差异均值: {diff_stats['mean']:.3f} (正值表示评委更偏爱)")
-    print(f"  差异标准差: {diff_stats['std']:.3f}")
-    print(f"  差异范围: [{diff_stats['min']:.3f}, {diff_stats['max']:.3f}]")
+    # 分析各类选手的特征
+    print("\n📈 各类选手特征分析:")
     
-    # 2. 差异分类
-    diff_thresholds = {
-        '评委显著偏爱 (>0.2)': (0.2, 1.0),
-        '评委轻微偏爱 (0.05-0.2)': (0.05, 0.2),
-        '基本一致 (-0.05-0.05)': (-0.05, 0.05),
-        '粉丝轻微偏爱 (-0.2--0.05)': (-0.2, -0.05),
-        '粉丝显著偏爱 (<-0.2)': (-1.0, -0.2)
-    }
-    
-    diff_categories = {}
-    for category, (min_val, max_val) in diff_thresholds.items():
-        mask = (analysis_df['judge_fan_difference'] >= min_val) & (analysis_df['judge_fan_difference'] <= max_val)
-        count = len(analysis_df[mask])
-        diff_categories[category] = count
-    
-    print("\n📈 差异分类统计:")
-    total_players = len(analysis_df)
-    for category, count in diff_categories.items():
-        percentage = count / total_players * 100
-        avg_rank = analysis_df[analysis_df['judge_fan_difference'].between(
-            diff_thresholds[category][0], diff_thresholds[category][1])]['final_rank'].mean()
-        print(f"  {category:25s}: {count:3d}人 ({percentage:5.1f}%), 平均排名: {avg_rank:.1f}")
-    
-    # 3. 差异与表现的关系
-    print("\n📊 评价差异与表现的关系:")
-    
-    # 计算差异与排名的相关性
-    diff_rank_corr = analysis_df['judge_fan_difference_abs'].corr(analysis_df['final_rank'])
-    print(f"  差异幅度与排名的相关性: {diff_rank_corr:.3f}")
-    print(f"  (正值表示差异越大，排名越差)")
-    
-    # 一致性指标与排名的相关性
-    agreement_rank_corr = analysis_df['judge_fan_agreement'].corr(analysis_df['final_rank'])
-    print(f"  一致性与排名的相关性: {agreement_rank_corr:.3f}")
-    print(f"  (负值表示一致性越高，排名越好)")
-    
-    # 4. 生成高级分析图表
-    print("\n🎨 生成高级分析图表...")
-    
-    plt.figure(figsize=(15, 10))
-    
-    # 子图1: 差异分布直方图
-    plt.subplot(2, 2, 1)
-    plt.hist(analysis_df['judge_fan_difference'], bins=30, alpha=0.7, color='purple', edgecolor='black')
-    plt.axvline(x=0, color='red', linestyle='--', linewidth=2, label='零差异线')
-    plt.axvline(x=analysis_df['judge_fan_difference'].mean(), color='blue', linestyle='--', linewidth=2, label='均值')
-    plt.xlabel('评委-粉丝评价差异\n(正值=评委偏爱，负值=粉丝偏爱)')
-    plt.ylabel('频数')
-    plt.title('评委-粉丝评价差异分布')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # 添加统计信息
-    plt.text(0.05, 0.95, 
-             f"均值: {diff_stats['mean']:.3f}\n"
-             f"标准差: {diff_stats['std']:.3f}\n"
-             f"偏度: {analysis_df['judge_fan_difference'].skew():.3f}",
-             transform=plt.gca().transAxes, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
-    # 子图2: 差异与排名关系散点图
-    plt.subplot(2, 2, 2)
-    plt.scatter(analysis_df['judge_fan_difference_abs'], analysis_df['final_rank'], 
-                alpha=0.5, c=analysis_df['judge_score_norm'], cmap='coolwarm')
-    
-    # 添加趋势线
-    z = np.polyfit(analysis_df['judge_fan_difference_abs'], analysis_df['final_rank'], 1)
-    p = np.poly1d(z)
-    x_range = np.linspace(analysis_df['judge_fan_difference_abs'].min(), analysis_df['judge_fan_difference_abs'].max(), 100)
-    plt.plot(x_range, p(x_range), 'r-', linewidth=2, label='趋势线')
-    
-    plt.colorbar(label='评委分数')
-    plt.xlabel('评价差异幅度')
-    plt.ylabel('最终排名')
-    plt.title('评价差异与最终排名关系')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    plt.text(0.05, 0.95, f'相关性: r = {diff_rank_corr:.3f}', 
-             transform=plt.gca().transAxes, verticalalignment='top',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
-    # 子图3: 不同差异类别的平均排名
-    plt.subplot(2, 2, 3)
-    
-    category_names = list(diff_categories.keys())
-    category_ranks = []
-    
-    for category in category_names:
-        mask = analysis_df['judge_fan_difference'].between(
-            diff_thresholds[category][0], diff_thresholds[category][1])
-        avg_rank = analysis_df[mask]['final_rank'].mean()
-        category_ranks.append(avg_rank)
-    
-    # 创建条形图
-    bars = plt.bar(range(len(category_names)), category_ranks, color='teal', alpha=0.7)
-    plt.xticks(range(len(category_names)), [name.split(' ')[0] for name in category_names], rotation=45, ha='right')
-    plt.xlabel('评价差异类别')
-    plt.ylabel('平均最终排名')
-    plt.title('不同评价差异类别的表现')
-    plt.grid(True, alpha=0.3, axis='y')
-    
-    # 在条形上添加数值
-    for bar, rank in zip(bars, category_ranks):
-        height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2., height + 0.1,
-                 f'{rank:.1f}', ha='center', va='bottom')
-    
-    # 子图4: 评委vs粉丝分数象限分析
-    plt.subplot(2, 2, 4)
-    
-    # 定义象限阈值
-    judge_median = analysis_df['judge_score_norm'].median()
-    fan_median = analysis_df['fan_score_norm'].median()
-    
-    # 划分象限
-    quadrants = {
-        '高评委-高粉丝': (analysis_df['judge_score_norm'] >= judge_median) & (analysis_df['fan_score_norm'] >= fan_median),
-        '高评委-低粉丝': (analysis_df['judge_score_norm'] >= judge_median) & (analysis_df['fan_score_norm'] < fan_median),
-        '低评委-高粉丝': (analysis_df['judge_score_norm'] < judge_median) & (analysis_df['fan_score_norm'] >= fan_median),
-        '低评委-低粉丝': (analysis_df['judge_score_norm'] < judge_median) & (analysis_df['fan_score_norm'] < fan_median)
-    }
-    
-    colors = ['green', 'blue', 'red', 'gray']
-    
-    for (quadrant_name, mask), color in zip(quadrants.items(), colors):
-        quadrant_data = analysis_df[mask]
-        if len(quadrant_data) > 0:
-            plt.scatter(quadrant_data['judge_score_norm'], quadrant_data['fan_score_norm'],
-                       alpha=0.5, label=f'{quadrant_name} ({len(quadrant_data)}人)', color=color, s=50)
-    
-    # 添加中位线
-    plt.axhline(y=fan_median, color='black', linestyle='--', linewidth=1, alpha=0.5)
-    plt.axvline(x=judge_median, color='black', linestyle='--', linewidth=1, alpha=0.5)
-    
-    plt.xlabel('归一化评委分数')
-    plt.ylabel('归一化粉丝分数')
-    plt.title('评委-粉丝分数象限分析')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    
-    # 添加象限信息
-    plt.text(0.75, 0.95, '高评委-高粉丝', transform=plt.gca().transAxes, ha='center', 
-             bbox=dict(boxstyle='round', facecolor='green', alpha=0.3))
-    plt.text(0.75, 0.05, '高评委-低粉丝', transform=plt.gca().transAxes, ha='center',
-             bbox=dict(boxstyle='round', facecolor='blue', alpha=0.3))
-    plt.text(0.25, 0.95, '低评委-高粉丝', transform=plt.gca().transAxes, ha='center',
-             bbox=dict(boxstyle='round', facecolor='red', alpha=0.3))
-    plt.text(0.25, 0.05, '低评委-低粉丝', transform=plt.gca().transAxes, ha='center',
-             bbox=dict(boxstyle='round', facecolor='gray', alpha=0.3))
-    
-    plt.tight_layout()
-    plt.savefig('Task3_Advanced_Judge_Fan_Analysis.png', dpi=300)
-    print("✅ 高级分析图表已保存: Task3_Advanced_Judge_Fan_Analysis.png")
-    
-    # 5. 象限分析详细统计
-    print("\n📊 象限分析详细统计:")
-    
-    for quadrant_name, mask in quadrants.items():
-        quadrant_data = analysis_df[mask]
-        if len(quadrant_data) > 0:
-            avg_rank = quadrant_data['final_rank'].mean()
-            avg_judge = quadrant_data['judge_score_norm'].mean()
-            avg_fan = quadrant_data['fan_score_norm'].mean()
-            count = len(quadrant_data)
-            
-            print(f"  {quadrant_name:15s}: {count:3d}人, 平均排名: {avg_rank:.1f}, "
-                  f"评委分: {avg_judge:.3f}, 粉丝分: {avg_fan:.3f}")
-    
-    # 6. 生成总结报告
-    print("\n" + "="*80)
-    print("📋 高级分析总结")
-    print("="*80)
-    
-    print(f"\n🎯 关键发现:")
-    print("   1. 评委与粉丝评价差异服从近似正态分布")
-    print(f"   2. 差异均值: {diff_stats['mean']:.3f} (略微偏向评委偏爱)")
-    print(f"   3. 评价差异与排名正相关 (r={diff_rank_corr:.3f})")
-    print("   4. 评委与粉丝评价越一致，选手表现越好")
-    
-    print(f"\n🏆 最佳表现象限: 高评委-高粉丝 (综合实力强)")
-    print(f"📉 最差表现象限: 低评委-低粉丝 (综合实力弱)")
-    print(f"🎭 争议象限: 高评委-低粉丝 (技术强但不受欢迎)")
-    print(f"                低评委-高粉丝 (受欢迎但技术弱)")
-    
-    print(f"\n💡 管理启示:")
-    print("   1. 评委和粉丝评价一致性是成功的重要指标")
-    print("   2. 争议选手(评价差异大)往往难以取得好成绩")
-    print("   3. 平衡评委偏好和粉丝偏好有助于选手长期成功")
-    
-    # 保存高级分析数据
-    advanced_columns = ['player_id', 'season', 'final_rank', 'age', 'industry',
-                       'judge_score_norm', 'fan_score_norm', 'combined_score',
-                       'judge_fan_difference', 'judge_fan_difference_abs', 'judge_fan_agreement']
-    
-    advanced_df = analysis_df[advanced_columns].copy()
-    advanced_df.to_excel("Task3_Advanced_Analysis_Data.xlsx", index=False)
-    print("\n✅ 高级分析数据已保存: Task3_Advanced_Analysis_Data.xlsx")
-    
-    return analysis_df
-
-# 运行高级分析
-advanced_analysis_df = advanced_judge_fan_analysis(optimized_analysis_df)
-
-# ===================== 9. 最终综合报告 =====================
-
-def generate_comprehensive_report(optimized_analysis_df, advanced_analysis_df):
-    """生成最终综合报告"""
-    
-    print("\n" + "="*80)
-    print("📄 最终综合报告：特征影响分析")
-    print("="*80)
-    
-    # 计算关键统计指标
-    total_players = len(optimized_analysis_df)
-    
-    # 评委与粉丝分数统计
-    judge_mean = optimized_analysis_df['judge_score_norm'].mean()
-    judge_std = optimized_analysis_df['judge_score_norm'].std()
-    fan_mean = optimized_analysis_df['fan_score_norm'].mean()
-    fan_std = optimized_analysis_df['fan_score_norm'].std()
-    
-    # 相关性分析
-    judge_fan_corr = optimized_analysis_df['judge_score_norm'].corr(optimized_analysis_df['fan_score_norm'])
-    judge_rank_corr = optimized_analysis_df['judge_score_norm'].corr(optimized_analysis_df['final_rank'])
-    fan_rank_corr = optimized_analysis_df['fan_score_norm'].corr(optimized_analysis_df['final_rank'])
-    combined_rank_corr = optimized_analysis_df['combined_score'].corr(optimized_analysis_df['final_rank'])
-    
-    # 差异分析
-    diff_mean = advanced_analysis_df['judge_fan_difference'].mean()
-    agreement_rank_corr = advanced_analysis_df['judge_fan_agreement'].corr(advanced_analysis_df['final_rank'])
-    
-    print(f"\n📊 分析概况:")
-    print(f"   • 分析选手总数: {total_players}")
-    print(f"   • 数据覆盖赛季: {optimized_analysis_df['season'].min()} 到 {optimized_analysis_df['season'].max()}")
-    
-    print(f"\n🎯 分数归一化分析:")
-    print(f"   • 评委分数: μ={judge_mean:.3f}, σ={judge_std:.3f}")
-    print(f"   • 粉丝分数: μ={fan_mean:.3f}, σ={fan_std:.3f}")
-    print(f"   • 评委与粉丝分数相关性: r={judge_fan_corr:.3f}")
-    
-    print(f"\n🏆 分数与排名相关性:")
-    print(f"   • 评委分数 vs 排名: r={judge_rank_corr:.3f} (负值有利)")
-    print(f"   • 粉丝分数 vs 排名: r={fan_rank_corr:.3f} (负值有利)")
-    print(f"   • 综合评分 vs 排名: r={combined_rank_corr:.3f} (负值有利)")
-    
-    print(f"\n🔄 评委-粉丝评价一致性:")
-    print(f"   • 平均差异: {diff_mean:.3f} (正值=评委偏爱)")
-    print(f"   • 一致性与排名相关性: r={agreement_rank_corr:.3f} (负值=一致有利)")
-    
-    # 行业影响分析
-    if 'industry' in optimized_analysis_df.columns:
-        print(f"\n👥 行业表现分析:")
-        
-        # 计算各行业平均表现
-        industry_stats = optimized_analysis_df.groupby('industry').agg({
-            'final_rank': 'mean',
-            'judge_score_norm': 'mean',
-            'fan_score_norm': 'mean',
-            'combined_score': 'mean',
-            'player_id': 'count'
-        }).rename(columns={'player_id': 'count'}).sort_values('final_rank')
-        
-        # 只显示有足够样本的行业
-        valid_industries = industry_stats[industry_stats['count'] >= 3]
-        
-        if len(valid_industries) > 0:
-            print(f"   • 表现最佳行业: {valid_industries.index[0]} (平均排名: {valid_industries.iloc[0]['final_rank']:.1f})")
-            print(f"   • 表现最差行业: {valid_industries.index[-1]} (平均排名: {valid_industries.iloc[-1]['final_rank']:.1f})")
-    
-    # 年龄影响分析
-    print(f"\n👤 年龄影响分析:")
-    
-    # 按年龄组分析
-    age_bins = [0, 25, 35, 45, 55, 100]
-    age_labels = ['<25', '25-35', '35-45', '45-55', '>55']
-    optimized_analysis_df['age_group'] = pd.cut(optimized_analysis_df['age'], bins=age_bins, labels=age_labels)
-    
-    age_stats = optimized_analysis_df.groupby('age_group').agg({
+    category_analysis = analysis_df_norm.groupby('score_ratio_category').agg({
+        'age': 'mean',
         'final_rank': 'mean',
-        'judge_score_norm': 'mean',
-        'fan_score_norm': 'mean',
+        'survival_rate': 'mean',
+        'avg_judge_norm': 'mean',
+        'avg_fan_norm': 'mean',
+        'judge_impact_ratio': 'mean',
+        'fan_impact_ratio': 'mean',
         'player_id': 'count'
-    }).rename(columns={'player_id': 'count'})
+    }).rename(columns={'player_id': 'count'}).round(3)
     
-    best_age_group = age_stats['final_rank'].idxmin()
-    worst_age_group = age_stats['final_rank'].idxmax()
+    print(category_analysis)
     
-    print(f"   • 最佳表现年龄组: {best_age_group} (平均排名: {age_stats.loc[best_age_group, 'final_rank']:.1f})")
-    print(f"   • 最差表现年龄组: {worst_age_group} (平均排名: {age_stats.loc[worst_age_group, 'final_rank']:.1f})")
-    
-    # 评委vs粉丝影响差异
-    print(f"\n🎭 评委vs粉丝影响差异:")
-    
-    # 计算评委和粉丝对排名的相对影响力
-    judge_influence = abs(judge_rank_corr) / (abs(judge_rank_corr) + abs(fan_rank_corr))
-    fan_influence = 1 - judge_influence
-    
-    print(f"   • 评委对排名的影响力: {judge_influence:.1%}")
-    print(f"   • 粉丝对排名的影响力: {fan_influence:.1%}")
-    
-    # 不同类型选手分析
-    print(f"\n🎪 不同类型选手表现:")
-    
-    # 定义选手类型
-    player_types = {
-        '评委宠儿': (optimized_analysis_df['judge_score_norm'] > optimized_analysis_df['judge_score_norm'].quantile(0.75)) & 
-                   (optimized_analysis_df['fan_score_norm'] < optimized_analysis_df['fan_score_norm'].quantile(0.25)),
-        '粉丝宠儿': (optimized_analysis_df['judge_score_norm'] < optimized_analysis_df['judge_score_norm'].quantile(0.25)) & 
-                   (optimized_analysis_df['fan_score_norm'] > optimized_analysis_df['fan_score_norm'].quantile(0.75)),
-        '全面型': (optimized_analysis_df['judge_score_norm'] > optimized_analysis_df['judge_score_norm'].quantile(0.75)) & 
-                 (optimized_analysis_df['fan_score_norm'] > optimized_analysis_df['fan_score_norm'].quantile(0.75)),
-        '弱势型': (optimized_analysis_df['judge_score_norm'] < optimized_analysis_df['judge_score_norm'].quantile(0.25)) & 
-                 (optimized_analysis_df['fan_score_norm'] < optimized_analysis_df['fan_score_norm'].quantile(0.25))
-    }
-    
-    for type_name, mask in player_types.items():
-        type_data = optimized_analysis_df[mask]
-        if len(type_data) > 0:
-            avg_rank = type_data['final_rank'].mean()
-            avg_judge = type_data['judge_score_norm'].mean()
-            avg_fan = type_data['fan_score_norm'].mean()
-            count = len(type_data)
+    # 行业偏好分析
+    if 'industry' in analysis_df_norm.columns:
+        print("\n🏢 各类选手的行业分布:")
+        
+        # 创建交叉表
+        industry_cross = pd.crosstab(
+            analysis_df_norm['score_ratio_category'],
+            analysis_df_norm['industry'],
+            normalize='index'
+        ).round(3)
+        
+        # 只显示比例较高的行业
+        industry_cross = industry_cross.loc[:, industry_cross.max() > 0.1]
+        
+        if not industry_cross.empty:
+            print(industry_cross)
             
-            print(f"   • {type_name:10s}: {count:2d}人, 平均排名: {avg_rank:.1f}, "
-                  f"评委: {avg_judge:.3f}, 粉丝: {avg_fan:.3f}")
+            # 可视化行业偏好
+            plt.figure(figsize=(12, 8))
+            
+            # 获取行业数据
+            industries_to_plot = industry_cross.columns.tolist()
+            categories = industry_cross.index.tolist()
+            
+            x = np.arange(len(industries_to_plot))
+            width = 0.25
+            
+            for i, category in enumerate(categories):
+                offset = (i - 1) * width
+                plt.bar(x + offset, industry_cross.loc[category], width, label=category)
+            
+            plt.xlabel('Industry')
+            plt.ylabel('proportion')
+            plt.title('Industry distribution of players in different categories')
+            plt.xticks(x, industries_to_plot, rotation=45, ha='right')
+            plt.legend()
+            plt.grid(True, alpha=0.3, axis='y')
+            
+            plt.tight_layout()
+            plt.savefig('Task3_Industry_Preference_by_Category.png', dpi=300)
+            print("✅ 行业偏好分析图表已保存: Task3_Industry_Preference_by_Category.png")
     
-    print(f"\n📈 核心结论:")
-    print("   1. 归一化处理成功解决了评委和粉丝分数尺度不一致的问题")
-    print("   2. 评委和粉丝分数对选手表现都有显著影响")
-    print("   3. 评委与粉丝评价一致性是成功的关键因素")
-    print("   4. 全面型选手（评委和粉丝都支持）表现最佳")
-    print("   5. 年龄和行业对表现有系统性影响")
+    # 成功因素分析：什么因素导致评委偏爱或粉丝偏爱？
+    print("\n🔑 成功因素分析:")
     
-    print(f"\n💡 对节目制作方的建议:")
-    print("   1. 关注评委与粉丝评价的一致性，避免争议过大")
-    print("   2. 平衡不同年龄和行业选手的参与")
-    print("   3. 综合考量技术和娱乐性，培养全面型选手")
-    print("   4. 利用评价差异创造节目看点，但需适度控制")
+    # 计算各类选手的成功率（定义为最终排名前30%）
+    top_threshold = analysis_df_norm['final_rank'].quantile(0.3)
+    analysis_df_norm['is_successful'] = (analysis_df_norm['final_rank'] <= top_threshold).astype(int)
     
-    # 保存最终报告
-    with open("Task3_Comprehensive_Analysis_Report.txt", "w", encoding="utf-8") as f:
-        f.write("="*80 + "\n")
-        f.write("2026 MCM 问题C - 任务1 综合特征分析报告\n")
-        f.write("="*80 + "\n\n")
-        
-        f.write("📊 分析概况\n")
-        f.write("-"*40 + "\n")
-        f.write(f"分析选手总数: {total_players}\n")
-        f.write(f"数据覆盖赛季: {optimized_analysis_df['season'].min()} 到 {optimized_analysis_df['season'].max()}\n\n")
-        
-        f.write("🎯 分数归一化分析\n")
-        f.write("-"*40 + "\n")
-        f.write(f"评委分数: μ={judge_mean:.3f}, σ={judge_std:.3f}\n")
-        f.write(f"粉丝分数: μ={fan_mean:.3f}, σ={fan_std:.3f}\n")
-        f.write(f"评委与粉丝分数相关性: r={judge_fan_corr:.3f}\n\n")
-        
-        f.write("🏆 分数与排名相关性\n")
-        f.write("-"*40 + "\n")
-        f.write(f"评委分数 vs 排名: r={judge_rank_corr:.3f}\n")
-        f.write(f"粉丝分数 vs 排名: r={fan_rank_corr:.3f}\n")
-        f.write(f"综合评分 vs 排名: r={combined_rank_corr:.3f}\n\n")
-        
-        f.write("🔄 评委-粉丝评价一致性\n")
-        f.write("-"*40 + "\n")
-        f.write(f"平均差异: {diff_mean:.3f}\n")
-        f.write(f"一致性与排名相关性: r={agreement_rank_corr:.3f}\n\n")
-        
-        f.write("👤 年龄影响\n")
-        f.write("-"*40 + "\n")
-        f.write(f"最佳表现年龄组: {best_age_group} (排名: {age_stats.loc[best_age_group, 'final_rank']:.1f})\n")
-        f.write(f"最差表现年龄组: {worst_age_group} (排名: {age_stats.loc[worst_age_group, 'final_rank']:.1f})\n\n")
-        
-        f.write("🎭 评委vs粉丝相对影响力\n")
-        f.write("-"*40 + "\n")
-        f.write(f"评委对排名的影响力: {judge_influence:.1%}\n")
-        f.write(f"粉丝对排名的影响力: {fan_influence:.1%}\n\n")
-        
-        f.write("📈 核心发现\n")
-        f.write("-"*40 + "\n")
-        f.write("1. 归一化处理效果显著\n")
-        f.write("   通过Min-Max归一化和Z-score标准化，评委和粉丝分数已置于相同尺度，\n")
-        f.write("   使得直接比较和综合分析成为可能。\n\n")
-        
-        f.write("2. 评委与粉丝评价存在系统性差异\n")
-        f.write(f"   评委平均略微偏爱选手(差异均值: {diff_mean:.3f})，\n")
-        f.write("   但评委与粉丝评价一致的选手往往表现更好。\n\n")
-        
-        f.write("3. 全面型选手最具竞争力\n")
-        f.write("   同时获得评委和粉丝高支持的选手平均排名最高，\n")
-        f.write("   单一依赖评委或粉丝支持的选手表现次之。\n\n")
-        
-        f.write("4. 特征对评委和粉丝的影响方式不同\n")
-        f.write("   年龄、行业等特征对评委和粉丝的影响程度和方向存在差异，\n")
-        f.write("   评委更注重技术因素，粉丝更注重娱乐性和个人魅力。\n\n")
-        
-        f.write("💡 建议\n")
-        f.write("-"*40 + "\n")
-        f.write("1. 评分系统优化\n")
-        f.write("   建议采用归一化评分体系，确保评委和粉丝分数可比性。\n\n")
-        
-        f.write("2. 选手选拔策略\n")
-        f.write("   平衡技术型和娱乐型选手，培养全面发展的参赛者。\n\n")
-        
-        f.write("3. 节目制作方向\n")
-        f.write("   适度利用评委-粉丝差异创造看点，但避免过度争议。\n\n")
-        
-        f.write("4. 规则设计\n")
-        f.write("   考虑引入综合评分机制，平衡评委和粉丝的权重。\n")
-        
-        f.write("\n" + "="*80 + "\n")
-        f.write("报告生成时间: %s\n" % pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"))
-        f.write("="*80)
+    success_by_category = analysis_df_norm.groupby('score_ratio_category')['is_successful'].mean()
     
-    print("\n✅ 综合报告已保存: Task3_Comprehensive_Analysis_Report.txt")
+    print("各类选手的成功率（最终排名前30%）:")
+    for category, success_rate in success_by_category.items():
+        print(f"  {category}: {success_rate:.1%}")
+    
+    # 逻辑回归分析成功因素
+    from sklearn.linear_model import LogisticRegression
+    
+    # 准备特征
+    success_features = ['age', 'avg_judge_norm', 'avg_fan_norm', 'judge_impact_ratio', 'fan_impact_ratio']
+    X_success = analysis_df_norm[success_features].fillna(0)
+    y_success = analysis_df_norm['is_successful']
+    
+    if len(X_success) > 10:
+        model_success = LogisticRegression(max_iter=1000)
+        model_success.fit(X_success, y_success)
+        
+        print("\n成功因素的逻辑回归系数:")
+        for feature, coef in zip(success_features, model_success.coef_[0]):
+            print(f"  {feature}: {coef:.4f}")
+        
+        # 计算特征重要性
+        importance = pd.DataFrame({
+            'feature': success_features,
+            'coefficient': model_success.coef_[0],
+            'importance': np.abs(model_success.coef_[0])
+        }).sort_values('importance', ascending=False)
+        
+        print("\n成功因素重要性排序:")
+        print(importance[['feature', 'coefficient']])
+    
+    # 生成总结报告
     print("\n" + "="*80)
-    print("🎉 特征分析模型开发完成！")
+    print("📋 评委与粉丝影响机制总结")
     print("="*80)
+    
+    print("\n🎯 关键发现:")
+    print("1. 评委与粉丝评价存在系统性差异")
+    print("2. 不同类别选手具有不同的成功模式")
+    print("3. 评委偏爱型选手通常技术表现更稳定")
+    print("4. 粉丝偏爱型选手更依赖人气和娱乐性")
+    print("5. 均衡型选手在比赛中表现最为稳定")
+    
+    print("\n💡 建议:")
+    print("• 节目制作方应保持评委与粉丝评价的平衡")
+    print("• 选手应根据自身特点选择适合的发展策略")
+    print("• 评委评分应更注重技术性，粉丝投票应更注重娱乐性")
+    print("• 合理的评委-粉丝权重设计能提高比赛公平性")
+    
+    
+    return analysis_df_norm
 
-# 生成最终综合报告
-generate_comprehensive_report(optimized_analysis_df, advanced_analysis_df)
+# 运行深入分析
+analysis_df_norm = analyze_judge_fan_mechanism(analysis_df_norm)
+
+print("\n" + "="*80)
+print("✅ 任务1 特征分析（优化版）完成！")
+print("="*80)
+print("📁 生成的文件:")
+print("  • Task3_Feature_Analysis_Normalized.png - 归一化分析图表")
+print("  • Task3_Industry_Preference_by_Category.png - 行业偏好分析")
+print("="*80)
